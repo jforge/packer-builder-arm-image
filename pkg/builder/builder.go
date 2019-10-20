@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"runtime"
 
 	packer_common "github.com/hashicorp/packer/common"
 	"github.com/hashicorp/packer/helper/config"
@@ -28,7 +29,7 @@ func init() {
 	knownArgs = make(map[utils.KnownImageType][]string)
 	knownTypes[utils.RaspberryPi] = []string{"/boot", "/"}
 	knownTypes[utils.BeagleBone] = []string{"/"}
-
+	knownTypes[utils.Kali] = []string{"/root", "/"}
 	knownArgs[utils.BeagleBone] = []string{"-cpu", "cortex-a8"}
 }
 
@@ -60,6 +61,10 @@ type Config struct {
 	// Should the last partition be extended? this only works for the last partition in the
 	// dos partition table, and ext filesystem
 	LastPartitionExtraSize uint64 `mapstructure:"last_partition_extra_size"`
+	// The target size of the final image. The last partiation will be extended to
+	// fill up this much room. I.e. if the generated image is 256MB and TargetImageSize
+	// is set to 384MB the last partition will be extended with an additional 128MB.
+	TargetImageSize uint64 `mapstructure:"target_image_size"`
 
 	// Qemu binary to use. default is qemu-arm-static
 	QemuBinary string `mapstructure:"qemu_binary"`
@@ -142,7 +147,6 @@ func (b *Builder) Prepare(cfgs ...interface{}) ([]string, error) {
 			b.config.ImageType = ""
 		}
 	}
-
 	if b.config.ImageType != "" {
 		if len(b.config.ImageMounts) == 0 {
 			b.config.ImageMounts = knownTypes[b.config.ImageType]
@@ -227,8 +231,17 @@ func (b *Builder) Run(ui packer.Ui, hook packer.Hook, cache packer.Cache) (packe
 	steps = append(steps,
 		&stepMountImage{PartitionsKey: "partitions", ResultKey: "mount_path"},
 		&StepMountExtra{ChrootKey: "mount_path"},
-		&stepQemuUserStatic{ChrootKey: "mount_path", PathToQemuInChrootKey: "qemuInChroot", Args: Args{Args: b.config.QemuArgs}},
-		&stepRegisterBinFmt{QemuPathKey: "qemuInChroot"},
+	)
+
+	native := runtime.GOARCH == "arm" || runtime.GOARCH == "arm64"
+	if !native {
+		steps = append(steps,
+			&stepQemuUserStatic{ChrootKey: "mount_path", PathToQemuInChrootKey: "qemuInChroot", Args: Args{Args: b.config.QemuArgs}},
+			&stepRegisterBinFmt{QemuPathKey: "qemuInChroot"},
+		)
+	}
+
+	steps = append(steps,
 		&StepChrootProvision{ChrootKey: "mount_path"},
 	)
 
